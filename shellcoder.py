@@ -1,6 +1,6 @@
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32, CsInsn
 from keystone import Ks, KS_ARCH_X86, KS_MODE_32
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 
 """
 * Keystone and Capstone haven't been properly type-annotated, which results
@@ -10,10 +10,10 @@ from argparse import ArgumentParser
 def ks_asm(ks: Ks, content: str) -> bytes       : return ks.asm(content, 0)[0]
 def cs_dis(cs: Cs, code: bytes) -> list[CsInsn] : return [*cs.disasm(code, 0)]
 
-def parse_arguments() -> tuple[str, str, list[int]] | None:
+def parse_arguments() -> Namespace | None:
     """
     parse and validate the CLI-arguments.<br>
-    **returns**: <contents\\>, <name\\>, <characters\\>
+    **returns**: Namespace<text: str, bads: list[int], name: str\\>
     """
 
     # ? parse through the built-in argument handler
@@ -26,22 +26,21 @@ def parse_arguments() -> tuple[str, str, list[int]] | None:
         action="store", help="bad-characters to highlight (hex)")
     parser.add_argument('-n', "--name", required=False, default="buffer",
         action="store", help="name of the output buffer")
-    params = parser.parse_args().__dict__
+    params = parser.parse_args()
 
     # ? ensure at least one source for content
-    if not any([params["text"], params["file"]]):
+    if not any([params.text, params.file]):
         return print("No contents provided.")
     
-    if all([params["text"], params["file"]]):
+    if all([params.text, params.file]):
         return print("Too many contents provided.")
 
     # ? convert bad-characters (if exist) to integers
     characters: list[int] = []
-    for char in params["bads"].split(','):
+    for char in params.bads.split(','):
 
         if not char: 
             continue
-
         try:
             if not (0 <= (xchar := int(char, 16)) <= 0xFF):
                 raise OverflowError
@@ -51,20 +50,20 @@ def parse_arguments() -> tuple[str, str, list[int]] | None:
             return print(f"Invalid bad-character: '{char}' (invalid hex)")
         except OverflowError:
             return print(f"Invalid bad-character: '{char}' (range: 0-FF)")
+    params.bads = characters #! explicit type-convertion (str -> list[int])
+
+    # text has priority!
+    if not params.file:
+        return params
     
     # ? read contents from file if path is provided
-    if not params["file"]: 
-
-        return params["text"], \
-               params["name"], \
-               characters
-    
     try:
 
-        with open(params["file"], 'r') as file:
+        with open(params.file, 'r') as file:
+
             # remove comments and newlines to match Keystone syntax
             nocoms = [x.split(';')[0].strip() for x in file.readlines()]
-            return ';'.join(nocoms), params["name"], characters
+            params.text = ';'.join(nocoms); return params
 
     except PermissionError:
         return print("Couldn't open file (insufficient permissions)")
@@ -94,8 +93,8 @@ def convert_to_CR(content: str) -> list[CsInsn] | None:
     
     except Exception as e:
         return print(f"Couldn't convert to IR: {e}")
-
-def create_lines(cr: list[CsInsn], name: str) -> list[str]:
+    
+def create_buffer(cr: list[CsInsn], name: str) -> list[str]:
     """
     generate every line that will eventually be output, these lines<br>
     follow the format: <name\\> += b"<bytes\\>" # <offset\\> | <text\\><br>
@@ -108,7 +107,7 @@ def create_lines(cr: list[CsInsn], name: str) -> list[str]:
     align_num = len(f"{cr[-1].address:x}") + 1
 
     # ? construct the output-string (without any highlights)
-    lines: list[str] = []
+    lines: list[str] = [f"{name}  = b''"]
     for line in cr:
 
         # <name> += b"<bytes>" # <offset> | <text>
@@ -124,7 +123,7 @@ def create_lines(cr: list[CsInsn], name: str) -> list[str]:
 
     return lines
 
-def to_stdout(lines: list[str], name: str, chars: list[int]) -> None:
+def to_stdout(lines: list[str], chars: list[int]) -> None:
     "display all lines on the terminal in a colour-coded manner"
 
     characters: list[str] = [f"\\x{n:02X}" for n in chars]
@@ -146,9 +145,9 @@ def to_stdout(lines: list[str], name: str, chars: list[int]) -> None:
     for char in characters:
         output = output.replace(char, f"\033[31m{char}\033[0m")
 
-    print(f"{name}  = b''\n" + output)
+    print(output)
 
 if __name__ == "__main__" and (args := parse_arguments()):
 
-    if (cr := convert_to_CR(args[0])):
-        to_stdout(create_lines(cr, args[1]), *args[1:])
+    if (cr := convert_to_CR(args.text)): 
+        to_stdout(create_buffer(cr, args.name), args.bads)
