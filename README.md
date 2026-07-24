@@ -25,4 +25,4 @@ getkrnl32_exit:
 
 Where `msfvenom` gives you a dump of bytes that aren't easily modifiable individually, this tool displays the shellcode on a per-line basis, with its original assembly beside the bytecode. It also highlights bad characters in the terminal and marks any affected line with `<!>`, so you can find it easily in a text editor, where colours don't apply.
 
-![example](./assets/example.png)
+![example](./external/example.png)
