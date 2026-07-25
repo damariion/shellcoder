@@ -11,8 +11,9 @@ enhancements such as bad-character highlighting and a simple snippets system.
 Below is an example of its usage, where we make use of the payload that
 resolves `kernel32.dll` by walking the Process Environment Block (PEB):
 
-```bash
-PS C:\Users\Administrator> type payload.asm
+```nasm
+; PS C:\Users\Administrator> type payload.asm
+
 getkrnl32:
     int3
     push ebp
@@ -34,8 +35,11 @@ getkrnl32_exit:
     mov esp, ebp
     pop ebp
     ret
+```
 
-PS C:\Users\Administrator> python .\shellcoder.py -f payload.asm
+```python
+# PS C:\Users\Administrator> python .\shellcoder.py -f payload.asm
+
 bytecode size: 42
 mnemonic size: 18
 
