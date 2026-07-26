@@ -1,12 +1,12 @@
 Shellcoder is a portable assembler that utilises Keystone and Capstone to
 convert source files to a Python buffer with informative comments. It has been
 designed to utilise the DLLs that are shipped with it to ensure usability
-on all x86 Windows systems, as long as at least Python 3.0 is installed.
+on all x86 Windows systems, as long as at least Python 3.9.6 is installed.
 
 While `msfvenom` would dump a block of bytecode after its payload generation,
 Shellcoder formats its buffer to match the original assembly code, providing
 useful details while debugging your payload. Additionally, it features routine
-enhancements such as bad-character highlighting and a simple snippets system.
+enhancements such as bad-character highlighting ~~and a simple snippets system.~~
 
 Below is an example of its usage, where we make use of the payload that
 resolves `kernel32.dll` by walking the Process Environment Block (PEB):
@@ -68,8 +68,8 @@ This script is meant to be run on Windows 10 (x86). To support this expectation,
 the following design choices have been made during its development:
 
 - All provided DLLs are compiled in 32-bit mode;
-- The code has been tested on Python 3.0;
-- Script enables ANSI for colour support in the native CMD;
+- The code has been tested on Python 3.9.6;
+- ~~Script enables ANSI for colour support in the native CMD;~~
 
 Finally, I'd like to mention that this script does not contain any intelligent
 features; it merely attempts to minimise tedium.

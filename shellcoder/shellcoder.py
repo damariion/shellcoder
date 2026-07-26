@@ -61,59 +61,57 @@ class Multistone:
         ]
 
         # ? load uniquely typed exports
-        match name:
+        if name == "keystone":
+                
+            apply = dll.ks_asm
+            apply.restype, apply.argtypes = \
+            ct.c_int, [                             # int <return>
+                ct.c_void_p,                        # ks_engine* ks
+                ct.c_char_p,                        # const char* string
+                ct.c_uint64,                        # uint64_t address
+                ct.POINTER(ct.POINTER(ct.c_ubyte)), # unsigned char** encoding
+                ct.POINTER(ct.c_size_t),            # size_t* encoding_size
+                ct.POINTER(ct.c_size_t)             # size_t* stat_count
+            ]
 
-            case "keystone":
+            free = dll.ks_free
+            free.restype, free.argtypes = \
+            None, [                    # void <return>
+                ct.POINTER(ct.c_ubyte) # unsigned char* p
+            ]
 
-                apply = dll.ks_asm
-                apply.restype, apply.argtypes = \
-                ct.c_int, [                             # int <return>
-                    ct.c_void_p,                        # ks_engine* ks
-                    ct.c_char_p,                        # const char* string
-                    ct.c_uint64,                        # uint64_t address
-                    ct.POINTER(ct.POINTER(ct.c_ubyte)), # unsigned char** encoding
-                    ct.POINTER(ct.c_size_t),            # size_t* encoding_size
-                    ct.POINTER(ct.c_size_t)             # size_t* stat_count
-                ]
+            close = dll.ks_close
+            close.restype, close.argtypes = \
+            ct.c_int, [     # ks_err <return>
+                ct.c_void_p # ks_engine* ks
+            ]
 
-                free = dll.ks_free
-                free.restype, free.argtypes = \
-                None, [                    # void <return>
-                    ct.POINTER(ct.c_ubyte) # unsigned char* p
-                ]
+        else:
 
-                close = dll.ks_close
-                close.restype, close.argtypes = \
-                ct.c_int, [     # ks_err <return>
-                    ct.c_void_p # ks_engine* ks
-                ]
+            apply = dll.cs_disasm
+            apply.restype, apply.argtypes = \
+            ct.c_size_t, [   # size_t <return>
+                ct.c_void_p, # csh handle
+                ct.c_char_p, # const uint8_t* code
+                ct.c_size_t, # size_t code_size
+                ct.c_uint64, # uint64_t address
+                ct.c_size_t, # size_t count
+                             # cs_insn** insn
+                ct.POINTER(ct.POINTER(Multistone.__instruction))
+            ]
 
-            case "capstone":
+            free = dll.cs_free
+            free.restype, free.argtypes = \
+            None, [                                    # void <return>
+                ct.POINTER( Multistone.__instruction), # cs_insn* insn,
+                ct.c_size_t                            # size_t count
+            ]
 
-                apply = dll.cs_disasm
-                apply.restype, apply.argtypes = \
-                ct.c_size_t, [   # size_t <return>
-                    ct.c_void_p, # csh handle
-                    ct.c_char_p, # const uint8_t* code
-                    ct.c_size_t, # size_t code_size
-                    ct.c_uint64, # uint64_t address
-                    ct.c_size_t, # size_t count
-                                 # cs_insn** insn
-                    ct.POINTER(ct.POINTER(Multistone.__instruction))
-                ]
-
-                free = dll.cs_free
-                free.restype, free.argtypes = \
-                None, [                                    # void <return>
-                    ct.POINTER( Multistone.__instruction), # cs_insn* insn,
-                    ct.c_size_t                            # size_t count
-                ]
-
-                close = dll.cs_close
-                close.restype, close.argtypes = \
-                ct.c_int, [                 # cs_err <return>
-                    ct.POINTER(ct.c_void_p) # csh* handle
-                ]
+            close = dll.cs_close
+            close.restype, close.argtypes = \
+            ct.c_int, [                 # cs_err <return>
+                ct.POINTER(ct.c_void_p) # csh* handle
+            ]
 
         # ? return an identically labeled namespace
         return Namespace(
@@ -234,7 +232,7 @@ class Multistone:
         # ? enable double release protection
         self.cs.engine = self.ks.engine = ct.c_void_p()
 
-def parse_arguments() -> Namespace | None:
+def parse_arguments() -> Namespace:
     "parse and validate CLI-provided arguments"
 
     # ? parse through the built-in argument handler
