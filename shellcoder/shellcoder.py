@@ -2,8 +2,7 @@ import ctypes as ct
 from argparse import ArgumentParser, Namespace
 
 class Instruction:
-    "this class is shared with the script, it"
-    "isolates only the necessary attributes"
+    "shared data-class for interoperability with Capstone"
 
     def __init__(self, address: int, mnemonic: str, bytecode: bytes) -> None:
 
@@ -13,7 +12,7 @@ class Instruction:
         self.bytecode = bytecode
 
 class Multistone:
-    "Compact Key- & Capstone wrapper, exposing only required APIs"
+    "compact Key- & Capstone wrapper, exposing only required APIs"
 
     class MultistoneException(Exception): ...
     class __instruction(ct.Structure):
@@ -322,8 +321,8 @@ def create_skeleton(crln: tuple[Instruction, ...], name: str) -> list[str]:
 def execute_shellcode(code: bytes) -> None:
 
     # ? declare the VirtualAlloc header
-    alloc = ct.CDLL("kernel32.dll").VirtualAlloc
-    alloc.restype, alloc.argtypes = \
+    VirtualAlloc = ct.CDLL("kernel32.dll").VirtualAlloc
+    VirtualAlloc.restype, VirtualAlloc.argtypes = \
     ct.c_void_p, [   # LPVOID <return>
         ct.c_void_p, # LPVOID lpAddress
         ct.c_size_t, # dwSize
@@ -332,18 +331,43 @@ def execute_shellcode(code: bytes) -> None:
     ]
 
     # ? move shellcode into executable buffer
-    buffer = alloc(None, len(code), 0x1000, 0x40)
+    buffer = VirtualAlloc(None, len(code), 0x1000, 0x40)
     ct.memmove(buffer, code, len(code))
 
     # ? execute the shellcode...
     input("Press enter to execute shellcode...")
     ct.CFUNCTYPE(None)(buffer)()
 
+def enable_vt_processing() -> None:
+
+    # ? define the required API headers
+    GetStdHandle = ct.CDLL(f"kernel32").GetStdHandle
+    GetStdHandle.restype, GetStdHandle.argtypes = \
+    ct.c_void_p, [   # HANDLE <return>
+        ct.c_uint32  # DWORD nStdHandle
+    ]
+
+    GetConsoleMode = ct.CDLL(f"kernel32").GetConsoleMode
+    GetConsoleMode.restype, GetConsoleMode.argtypes = \
+    ct.c_bool, [     # BOOL <return>
+        ct.c_void_p, # HANDLE hConsoleHandle
+        ct.c_void_p  # LPDWORD lpMode
+    ]
+
+    SetConsoleMode = ct.CDLL(f"kernel32").SetConsoleMode
+    SetConsoleMode.restype, SetConsoleMode.argtypes = \
+    ct.c_bool, [     # BOOL <return>
+        ct.c_void_p, # HANDLE hConsoleHandle
+        ct.c_uint32  # DWORD dwMode
+    ]
+
+    # ? enable VT processing in the native CMD prompt
+    handle, mode = GetStdHandle(-11), ct.c_uint32()
+    GetConsoleMode(handle, ct.byref(mode))
+    SetConsoleMode(handle, mode.value | 0x4)
+
 def printf(skeleton: list[str], chars: list[int]) -> None:
     "display all lines on the terminal in a colour-coded manner"
-
-    # TODO: enable ANSI for colour support in native CMD
-    ...
 
     # ? insert the highlighting of bad-characters
     characters: list[str] = [f"\\x{n:02X}" for n in chars]
@@ -363,7 +387,8 @@ def printf(skeleton: list[str], chars: list[int]) -> None:
     for char in characters:
         output = output.replace(char, f"\033[31m{char}\033[0m")
 
-    print(output)
+    # ? output buffer with colour support
+    enable_vt_processing(); print(output)
 
 if __name__ == "__main__":
 
