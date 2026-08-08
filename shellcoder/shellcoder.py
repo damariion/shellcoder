@@ -292,7 +292,6 @@ def parse_arguments() -> Namespace:
     except FileNotFoundError:
         raise FileNotFoundError("Couldn't open file (non-existent path)")
 
-
 def create_skeleton(crln: tuple[Instruction, ...], name: str) -> list[str]:
     "generate the individual lines (skeleton) of the buffer"
 
@@ -379,13 +378,13 @@ def printf(skeleton: list[str], chars: list[int]) -> None:
 
         # colour mnemonical instruction
         edge = line.find("|") + 1
-        skeleton[index] = line[:edge] + "\033[31m" + \
+        skeleton[index] = line[:edge] + "\033[91m" + \
                           line[edge:] + "\033[0m "
 
     # colour individual instances
     output: str = '\n'.join(skeleton)
     for char in characters:
-        output = output.replace(char, f"\033[31m{char}\033[0m")
+        output = output.replace(char, f"\033[91m{char}\033[0m")
 
     # ? output buffer with colour support
     enable_vt_processing(); print(output)
