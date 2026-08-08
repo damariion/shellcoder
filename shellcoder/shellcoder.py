@@ -380,7 +380,7 @@ def printf(skeleton: list[str], chars: list[int]) -> None:
         # colour mnemonical instruction
         edge = line.find("|") + 1
         skeleton[index] = line[:edge] + "\033[31m" + \
-                          line[edge:] + "\033[0m " + '<!>'
+                          line[edge:] + "\033[0m "
 
     # colour individual instances
     output: str = '\n'.join(skeleton)
