@@ -11,30 +11,6 @@ enhancements such as bad-character highlighting and mnemonic size annotation.
 Below is an example of its usage, where we make use of the payload that
 resolves `kernel32.dll` by walking the Process Environment Block (PEB):
 
-```nasm
-getkrnl32:
-    int3
-    push ebp
-    mov ebp, esp
-    sub esp, 0x20
-    xor edx, edx
-    mov dword ptr [ebp-0x04], esi
-    mov esi, fs:[edx+0x30]
-    mov esi, [esi+0x0C]
-    mov esi, [esi+0x1C]
-getkrnl32_next:
-    mov eax, [esi+0x08]
-    mov ecx, [esi+0x20]
-    mov esi, [esi]
-    cmp dword ptr [ecx+0x18], edx
-    jne getkrnl32_next
-getkrnl32_exit:
-    mov esi, [ebp-0x04]
-    mov esp, ebp
-    pop ebp
-    ret
-```
-
 ![example](example.png)
 
 This script is meant to be run on Windows 10 (x86). To support this expectation,
