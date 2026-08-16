@@ -1,417 +1,279 @@
-import ctypes as ct
-from argparse import ArgumentParser, Namespace
+import ctypes    as ct
+from typing      import Any
+from argparse    import ArgumentParser
+from dataclasses import dataclass
 
+@dataclass
 class Instruction:
-    "shared data-class for interoperability with Capstone"
+    "structure that holds information on a single line"
 
-    def __init__(self, address: int, mnemonic: str, bytecode: bytes) -> None:
+    bytecode: "bytes | None"
+    mnemonic: "str   | None"
+    comments: "str   | None"
 
-        # mimic @dataclass
-        self.address  = address
-        self.mnemonic = mnemonic
-        self.bytecode = bytecode
+class Keystone:
 
-class Multistone:
-    "compact Key- & Capstone wrapper, exposing only required APIs"
+    class KeystoneException(Exception): ...
+    def __inherit_exports(self, dll: ct.CDLL) -> None:
+        "make the exports accessible through this class"
 
-    class MultistoneException(Exception): ...
-    class __instruction(ct.Structure):
-        "structure used to serialise the Capstone's struct<csins>"
-
-        _fields_ = (
-            ("id",        ct.c_uint),
-            ("address",   ct.c_uint64),
-            ("size",      ct.c_uint16),
-            ("bytes",     ct.c_ubyte * 16), # 24 on recent capstone
-            ("mnemonic",  ct.c_char  * 32), 
-            ("op_str",    ct.c_char  * 160),
-            ("cs_detail", ct.c_void_p)
-        )
-
-    @staticmethod
-    def __load_exports(dll: ct.CDLL) -> Namespace:
-        "load exports from either Keystone or Capstone (DRY)"
-
-        # ? resolve the DLL name (tested on MacOS and Windows 10)
-        name = dll._name[(i := dll._name.rfind(".")) - 8:i]
-
-        if (name := name.lower()) not in ("keystone", "capstone"):
-            raise Exception(f"Invalid name parsed: {name}")
-
-        # ? load commonly typed exports
-        open = getattr(dll, f"{name[0]}s_open")
-        open.restype, open.argtypes = \
-        ct.c_int, [                 # *s_err <return>
-            ct.c_int,               # *s_arch arch
-            ct.c_int,               # *s_mode mode
-            ct.POINTER(ct.c_void_p) # csh* handle / ks_engine** ks
+        # * instance management
+        self.open = dll.ks_open
+        self.open.restype, self.open.argtypes = \
+        ct.c_int, [                 # ks_err <return>
+            ct.c_int,               # ks_arch arch
+            ct.c_int,               # ks_mode mode
+            ct.POINTER(ct.c_void_p) # ks_engine** ks
         ]
 
-        errno = getattr(dll, f"{name[0]}s_errno")
-        errno.restype, errno.argtypes = \
-        ct.c_int, [     # cs_err <return>
-            ct.c_void_p # csh handle
+        self.close = dll.ks_close
+        self.close.restype, self.close.argtypes = \
+        ct.c_int, [     # ks_err <return>
+            ct.c_void_p # ks_engine* ks
         ]
 
-        strerror = getattr(dll, f"{name[0]}s_strerror")
-        strerror.restype, strerror.argtypes = \
+        # * exception handling
+        self.errno = dll.ks_errno
+        self.errno.restype, self.errno.argtypes = \
+        ct.c_int, [     # ks_err <return>
+            ct.c_void_p # ks_engine* ks
+        ]
+
+        self.strerror = dll.ks_strerror
+        self.strerror.restype, self.strerror.argtypes = \
         ct.c_char_p, [ # const char* <return>
-            ct.c_int   # cs_err code
+            ct.c_int   # ks_err code
         ]
 
-        # ? load uniquely typed exports
-        if name == "keystone":
-                
-            apply = dll.ks_asm
-            apply.restype, apply.argtypes = \
-            ct.c_int, [                             # int <return>
-                ct.c_void_p,                        # ks_engine* ks
-                ct.c_char_p,                        # const char* string
-                ct.c_uint64,                        # uint64_t address
-                ct.POINTER(ct.POINTER(ct.c_ubyte)), # unsigned char** encoding
-                ct.POINTER(ct.c_size_t),            # size_t* encoding_size
-                ct.POINTER(ct.c_size_t)             # size_t* stat_count
-            ]
+        # * resource management
+        self.asm = dll.ks_asm
+        self.asm.restype, self.asm.argtypes = \
+        ct.c_int, [                             # int <return>
+            ct.c_void_p,                        # ks_engine* ks
+            ct.c_char_p,                        # const char* string
+            ct.c_uint64,                        # uint64_t address
+            ct.POINTER(ct.POINTER(ct.c_ubyte)), # unsigned char** encoding
+            ct.POINTER(ct.c_size_t),            # size_t* encoding_size
+            ct.POINTER(ct.c_size_t)             # size_t* stat_count
+        ]
 
-            free = dll.ks_free
-            free.restype, free.argtypes = \
-            None, [                    # void <return>
-                ct.POINTER(ct.c_ubyte) # unsigned char* p
-            ]
+        self.free = dll.ks_free
+        self.free.restype, self.free.argtypes = \
+        None, [                    # void <return>
+            ct.POINTER(ct.c_ubyte) # unsigned char* p
+        ]
 
-            close = dll.ks_close
-            close.restype, close.argtypes = \
-            ct.c_int, [     # ks_err <return>
-                ct.c_void_p # ks_engine* ks
-            ]
+    def __init__(self, path: str) -> None:
 
-        else:
+        # ? verify accessibility
+        try: open(path, 'r').close()
+        except PermissionError:
+            raise Exception(f"Couldn't open Keystone (access denied)")
+        except FileNotFoundError:
+            raise Exception(f"Couldn't open Keystone (doesn't exist)")
 
-            apply = dll.cs_disasm
-            apply.restype, apply.argtypes = \
-            ct.c_size_t, [   # size_t <return>
-                ct.c_void_p, # csh handle
-                ct.c_char_p, # const uint8_t* code
-                ct.c_size_t, # size_t code_size
-                ct.c_uint64, # uint64_t address
-                ct.c_size_t, # size_t count
-                             # cs_insn** insn
-                ct.POINTER(ct.POINTER(Multistone.__instruction))
-            ]
+        self.dll = ct.CDLL(path)
+        self.ins = ct.c_void_p()
+        self.__inherit_exports(self.dll)
 
-            free = dll.cs_free
-            free.restype, free.argtypes = \
-            None, [                                    # void <return>
-                ct.POINTER( Multistone.__instruction), # cs_insn* insn,
-                ct.c_size_t                            # size_t count
-            ]
+        # ? initialise ks_engine*
+        if (errco := self.open(4, 4, ct.byref(self.ins))):
+            raise Exception(self.strerror(errco).decode())
 
-            close = dll.cs_close
-            close.restype, close.argtypes = \
-            ct.c_int, [                 # cs_err <return>
-                ct.POINTER(ct.c_void_p) # csh* handle
-            ]
-
-        # ? return an identically labeled namespace
-        return Namespace(
-            open     = open,
-            free     = free,
-            close    = close,
-            apply    = apply,
-            errno    = errno,
-            strerror = strerror
-            )
-
-    def __last_error(self) -> str:
-
-        # ? determine faulty operation uniformly
-        if (code := self.ks.errno(self.ks.engine)):
-            return self.ks.strerror(code).decode()
-        if (code := self.cs.errno(self.cs.engine)):
-            return self.cs.strerror(code).decode()
-
-        # this message is identical between modules
-        return "No error: everything was fine"
-
-    def asm(self, text: str) -> bytes:
-
-        # ? initialise values
-        size = ct.c_size_t()
-        stat = ct.c_size_t()
-        buff = ct.POINTER(ct.c_ubyte)()
-
-        # ? perform the assembly through Keystone
-        if self.ks.apply(
-
-            self.ks.engine, # ks_engine ks*
-            text.encode(),  # const char* string
-            ct.c_uint64(0), # uint64_t address
-            ct.byref(buff), # unsigned char **encoding
-            ct.byref(size), # size_t* encoding_size
-            ct.byref(stat)  # size_t* stat_count
-
-        ): raise self.MultistoneException(
-            f"Couldn't assemble text: {self.__last_error()}")
-
-        # ? capture and immediately free
-        result = bytes(buff[:size.value])
-        self.ks.free(buff); return result
-
-    def dis(self, code: bytes) -> tuple[Instruction, ...]:
-
-        # ? perform the disassembly through Capstone
-        array = ct.POINTER(self.__instruction)()
-        count = self.cs.apply(
-
-            self.cs.engine,         # csh handle
-            code,                   # const uint8_t* code
-            ct.c_size_t(len(code)), # size_t code_size
-            ct.c_uint64(0),         # uint64_t address
-            ct.c_size_t(0),         # size_t count
-            ct.byref(array)         # cs_insn** insn
-
-            )
-
-        # ? capture and immediately free
-        result: list[Instruction] = []
-        for i in range(count):
-
-            mnemonic = array[i].mnemonic.decode()
-            operands = array[i].op_str.decode()
-            bytecode = array[i].bytes
-
-            result.append(
-                Instruction(
-                    array[i].address,               # e.g. 0x2f
-                    f"{mnemonic} {operands}",       # e.g. xor eax, eax
-                    bytes(bytecode)[:array[i].size] # e.g. b'1\xc0'
-                )
-            )
-
-        self.cs.free(array, count)
-
-        # ? prevent Cs from ignoring instructions silently
-        if sum(len(x.bytecode) for x in result) < len(code):
-            raise self.MultistoneException(
-                f"Couldn't disassemble code: {self.__last_error()}")
-
-        return (*result,)
-
-    def __init__(self, ks_dll: ct.CDLL, cs_dll: ct.CDLL) -> None:
-
-        # ? load exports
-        self.ks = self.__load_exports(ks_dll)
-        self.cs = self.__load_exports(cs_dll)
-        self.ks.engine, self.cs.engine = ct.c_void_p(), ct.c_void_p()
-
-        if (code := self.ks.open(4, 4, ct.byref(self.ks.engine))):
-            text = self.ks.strerror(code).decode()
-            raise self.MultistoneException(f"Couldn't open Keystone: {text}")
-
-        if (code := self.cs.open(3, 4, ct.byref(self.cs.engine))):
-            text = self.cs.strerror(code).decode()
-            raise self.MultistoneException(f"Couldn't open Capstone: {text}")
-
-    def __enter__(self) -> 'Multistone':
+    def __enter__(self) -> 'Keystone':
         return self
     def __exit__(self, *args: tuple[object]) -> None:
 
-        # ? prevent double release
-        if  (not self.ks.engine) \
-        and (not self.cs.engine): return
+        # ? close engine if not already closed
+        if self.ins and self.close(self.ins):
+            raise Exception("Couldn't close Keystone")
+        self.ins = ct.c_void_p()
 
-        # ? free the engines individually
-        if self.ks.close(self.ks.engine):
-            raise self.MultistoneException(
-                f"Couldn't close Keystone: {self.__last_error()}")
-        if self.cs.close(self.cs.engine):
-            raise self.MultistoneException(
-                f"Couldn't close Capstone: {self.__last_error()}")
+class Utilities:
 
-        # ? enable double release protection
-        self.cs.engine = self.ks.engine = ct.c_void_p()
+    @staticmethod
+    def stack_string(value: str) -> int:
+        # TODO: Remove null-bytes entirely
 
-def parse_arguments() -> Namespace:
-    "parse and validate CLI-provided arguments"
+        # split string into segments of 4 where last is truncated
+        segments = [value[i:i+4] for i in range(0, len(value), 4)]
+        for segment in segments[::-1]:
 
-    # ? parse through the built-in argument handler
+            # convert each char to hexadecimal variant
+            base16 = [f"{ord(char):x}" for char in segment]
+
+            # swap endianness and add null-byte padding
+            string = segment.ljust(4, '.')[::-1]
+            base16 = ''.join(base16[::-1]).rjust(8, '0')
+        
+            print(f"push 0x{base16} ; {string}")
+
+        return 0
+
+def text_to_bytecode(ks: Keystone, text: str) -> bytes:
+
+    size = ct.c_size_t()
+    stat = ct.c_size_t()
+    buff = ct.POINTER(ct.c_ubyte)()
+
+    if ks.asm(
+
+        ks.ins,         # ks_engine ks*
+        text.encode(),  # const char* string
+        ct.c_uint64(0), # uint64_t address
+        ct.byref(buff), # unsigned char **encoding
+        ct.byref(size), # size_t* encoding_size
+        ct.byref(stat)  # size_t* stat_count
+
+    ): raise Keystone.KeystoneException(
+        ks.strerror(ks.errno(ks.ins)).decode())
+
+    # ? capture and immediately free
+    result = bytes(buff[:size.value])
+    ks.free(buff); return result
+
+def text_to_instructions(text: str) -> list[Instruction]:
+    "normalise the contents to AssemblyLine type"
+
+    output: list[Instruction] = []
+
+    # ? exclude -t contents
+    if '\n' not in text:
+
+        # ! comments aren't supported in text-mode
+        for mnemonic in text.split(';'):
+            if not mnemonic: continue
+            output.append(Instruction
+            (
+                mnemonic = mnemonic,
+                comments = None,
+                bytecode = None
+            ))
+        return output
+
+    for line in text.split('\n'):
+
+        # ? capture and filter required elements
+        mnemonic = (l := line.split(';'))[0].strip()
+        comments = ';'.join(l[1:]).strip()
+
+        if any((mnemonic, comments)):
+            output.append(Instruction
+            (
+                mnemonic = mnemonic,
+                comments = comments,
+                bytecode = None
+            ))
+
+    return output
+
+def insert_bytecode(ks: Keystone, instructions: list[Instruction]) -> list[Instruction]:
+    "populate the provided assembly lines with their corresponding bytecode"
+
+    # ? join mnemonics in keystone-recognised format
+    original = ' ; '.join([x.mnemonic for x in instructions if x.mnemonic])
+    inserted = original.replace(';', ';salc;' * 2) # very uncommon!
+
+    # ? assemble the text (inserted will be used to distinct newlines)
+    original = text_to_bytecode(ks, original) # ! explicit cast str -> bytes
+    inserted = text_to_bytecode(ks, inserted) # ! explicit cast str -> bytes
+
+    # ? distinct newlines through comparisions
+    bytecodes: list[bytes] = []; offset: int = 0
+    for line in [x for x in inserted.split(b"\xD6" * 2) if x]:
+
+        # TODO: filter on branching opcodes (size differences)
+        bytecodes.append(original[offset:offset+(size:=len(line))])
+        offset += size # previous occurance (slice) is exclusive
+
+    # ? populate Line object with bytecode
+    output: list[Instruction] = []; i: int = -1
+    for instruction in instructions:
+
+        # ignore comments and labels
+        if (m := instruction.mnemonic) and not (':' in m and '[' not in m):
+            instruction.bytecode = bytecodes[(i := i + 1)]
+        output.append(instruction);
+
+    return output
+
+def parse_arguments() -> "dict[str, Any] | None":
+
+    # ? parse CLI-arguments
     parser = ArgumentParser()
-    parser.add_argument('-f', "--file", required=False, default='',
+    parser.add_argument('-f', "--file",
         action="store", help="assemble contents of a file")
-    parser.add_argument('-t', "--text", required=False, default='',
-        action="store", help="assemble contents of a text")
-    parser.add_argument('-b', "--bads", required=False, default="0",
-        action="store", help="bad-characters to highlight (in hex)")
-    parser.add_argument('-n', "--name", required=False, default="buffer",
+    parser.add_argument('-t', "--text",
+        action="store", help="assemble contents of a line")
+    parser.add_argument('-b', "--bads",
+        action="append", help="bad-characters to highlight (in hex)")
+    parser.add_argument('-n', "--name", default="buffer",
         action="store", help="name of the output buffer")
-    parser.add_argument('-e', "--exec", required=False, default=False,
+    parser.add_argument('-u', "--util",
+        action="store", help="utilise an integrated tool")
+    parser.add_argument('-e', "--exec",
         action="store_true", help="execute the assembly on this system")
-    parser.add_argument('-k', "--keystone", required=False, default="./keystone.dll",
-        action="store", help="path of the keystone library")
-    parser.add_argument('-c', "--capstone", required=False, default="./capstone.dll",
-        action="store", help="path of the capstone library")
-    params = parser.parse_args()
+    params = parser.parse_args().__dict__
 
-    # ? ensure at least one source for content
-    if not any([params.text, params.file]):
-        raise ValueError("No contents provided")
+    # ? verify: content (combinations)
+    if not any([params["file"], params["text"]]):
+        return print("Invalid content (none provided)")
+    if all([params["file"], params["text"]]):
+        return print("Invalid content (too much provided)")
 
-    # ? convert bad-characters (if exist) to integers
-    characters: list[int] = []
-    for char in params.bads.split(','):
+    # ? verify: content (accessibility)
+    if params["file"]:
+        try:
+            with open(params["file"], 'r') as file:
+                params["text"] = file.read()
+        except PermissionError:
+            return print("Invalid file (access denied)")
+        except FileNotFoundError:
+            return print("Invalid file (doesn't exist)")
+
+    # ? verify: bad-characters (range and type)
+    for char in params["bads"] or '':
+        try:
+            if not (0x00 <= int(char, 16) <= 0xFF):
+                return print(f"Invalid bad-character '{char}' (out of range)")
+        except ValueError:
+            return print(f"Invalid bad-character '{char}' (not an integer)")
+
+    # ? verify: name (illegal symbols)
+    alpha = "1234567890abcdefghijklmnopqrstuvwxyz_"
+    if (name := params["name"])[0].isdigit():
+        return print(f"Invalid name '{name}' (can't start with digit)")
+    for char in params["name"]:
+        if char not in [*alpha, *alpha.upper()]:
+            return print(f"Invalid name '{name}' (illegal symbol '{char}')")
+
+    # ? verify: utility (existence)
+    utils = filter(lambda f: '__' not in f, Utilities.__dict__)
+    if (util := params["util"]) and util not in utils:
+        return print(f"Invalid utility '{util}' (doesn't exist)")
+
+    return {
+        "text": params["text"],
+        "name": params["name"],
+        "util": params["util"],
+        "exec": params["exec"] or False,
+        "bads": params["bads"] or [],
+    }
+
+if __name__ == "__main__" and (args := parse_arguments()):
+
+    # ? execute utility if requested
+    if (util := str(args["util"] or '')):
+        exit(getattr(Utilities, util)(args["text"]))
+
+    # ? assemble the contents and obtain list[Instruction]
+    with Keystone("shellcoder/include/keystone.dylib") as ks:
 
         try:
+            instructions = text_to_instructions(str(args["text"]))
+            instructions = insert_bytecode(ks, instructions)
+        except Exception as e:
+            exit(f"Couldn't assemble content: {e}")
 
-            if not char: 
-                continue
-            if not (0 <= (xchar := int(char, 16)) <= 0xFF):
-                raise OverflowError
-
-            characters.append(xchar)
-
-        except ValueError:
-            raise ValueError(f"Invalid bad-character: '{char}' (invalid hex)")
-        except OverflowError:
-            raise OverflowError(f"Invalid bad-character: '{char}' (range: 0-FF)")
-    params.bads = characters #! explicit type-convertion (str -> list[int])
-
-    # ? read contents of the provided file, only if no text is present
-    try:
-
-        if not params.file:
-            return params
-
-        with open(params.file, 'r') as file:
-
-            # remove comments and newlines to match Keystone syntax
-            nocoms = [x.split(';')[0].strip() for x in file.readlines()]
-            params.text = ';'.join(nocoms); return params
-
-    except PermissionError:
-        raise PermissionError("Couldn't open file (insufficient permissions)")
-    except FileNotFoundError:
-        raise FileNotFoundError("Couldn't open file (non-existent path)")
-
-def create_skeleton(crln: tuple[Instruction, ...], name: str) -> list[str]:
-    "generate the individual lines (skeleton) of the buffer"
-
-    # ? define the metadata required for alignment
-    align_com = max(crln, key=lambda x: len(x.bytecode))
-    align_com = len(align_com.bytecode) * 4 + 7
-    align_num = len(f"{crln[-1].address:x}") + 1
-
-    # ? construct the output-string (without any highlights)
-    lines: list[str] = [f"{name}  = b''"]
-    for line in crln:
-
-        # <name> += b"<bytes>" # <offset> | <text>
-        lines.append('%s += b"\\x%s"%s#%s%s | %s' \
-            % (
-                name,
-                '\\x'.join([f'{n:02X}' for n in line.bytecode]),
-                ' ' * (align_com - (len(line.bytecode) * 4 + 6)),
-                ' ' * (align_num - len(f"{line.address:x}")),
-                f"{line.address:x}",
-                line.mnemonic
-            ))   
-
-    return lines
-
-def execute_shellcode(code: bytes) -> None:
-
-    # ? declare the VirtualAlloc header
-    VirtualAlloc = ct.CDLL("kernel32.dll").VirtualAlloc
-    VirtualAlloc.restype, VirtualAlloc.argtypes = \
-    ct.c_void_p, [   # LPVOID <return>
-        ct.c_void_p, # LPVOID lpAddress
-        ct.c_size_t, # dwSize
-        ct.c_int32,  # flAllocationType
-        ct.c_int32   # flProtect
-    ]
-
-    # ? move shellcode into executable buffer
-    buffer = VirtualAlloc(None, len(code), 0x1000, 0x40)
-    ct.memmove(buffer, code, len(code))
-
-    # ? execute the shellcode...
-    input("Press enter to execute shellcode...")
-    ct.CFUNCTYPE(None)(buffer)()
-
-def enable_vt_processing() -> None:
-
-    # ? define the required API headers
-    GetStdHandle = ct.CDLL(f"kernel32").GetStdHandle
-    GetStdHandle.restype, GetStdHandle.argtypes = \
-    ct.c_void_p, [   # HANDLE <return>
-        ct.c_uint32  # DWORD nStdHandle
-    ]
-
-    GetConsoleMode = ct.CDLL(f"kernel32").GetConsoleMode
-    GetConsoleMode.restype, GetConsoleMode.argtypes = \
-    ct.c_bool, [     # BOOL <return>
-        ct.c_void_p, # HANDLE hConsoleHandle
-        ct.c_void_p  # LPDWORD lpMode
-    ]
-
-    SetConsoleMode = ct.CDLL(f"kernel32").SetConsoleMode
-    SetConsoleMode.restype, SetConsoleMode.argtypes = \
-    ct.c_bool, [     # BOOL <return>
-        ct.c_void_p, # HANDLE hConsoleHandle
-        ct.c_uint32  # DWORD dwMode
-    ]
-
-    # ? enable VT processing in the native CMD prompt
-    handle, mode = GetStdHandle(-11), ct.c_uint32()
-    GetConsoleMode(handle, ct.byref(mode))
-    SetConsoleMode(handle, mode.value | 0x4)
-
-def printf(skeleton: list[str], chars: list[int]) -> None:
-    "display all lines on the terminal in a colour-coded manner"
-
-    # ? insert the highlighting of bad-characters
-    characters: list[str] = [f"\\x{n:02X}" for n in chars]
-    for index, line in enumerate(skeleton):
-
-        # proceed if line does not contain bad-characters
-        if not any([char in line for char in characters]):
-            continue
-
-        # colour mnemonical instruction
-        edge = line.find("|") + 1
-        skeleton[index] = line[:edge] + "\033[91m" + \
-                          line[edge:] + "\033[0m "
-
-    # colour individual instances
-    output: str = '\n'.join(skeleton)
-    for char in characters:
-        output = output.replace(char, f"\033[91m{char}\033[0m")
-
-    # ? output buffer with colour support
-    enable_vt_processing(); print(output)
-
-if __name__ == "__main__":
-
-    try:
-
-        # ? parse CLI-provided arguments
-        if not (args := parse_arguments()):
-            raise Exception()
-
-        # ? convert text to common representation (CR)
-        ks_dll = ct.CDLL(args.keystone)
-        cs_dll = ct.CDLL(args.capstone)
-
-        with Multistone(ks_dll, cs_dll) as ms:
-
-            code = ms.asm(args.text)
-            crln = ms.dis(code)
-
-        # ? utilise CR for flagged functionality
-        if args.exec: 
-            execute_shellcode(code)
-        else:
-            print(f"bytecode size: {len(code)}")
-            print(f"mnemonic size: {len(crln)}", end='\n\n')
-            printf(create_skeleton(crln, args.name), args.bads)
-
-    except Exception as e: print(str(e))
+    # ? neatly formatted instructions
+    ...
