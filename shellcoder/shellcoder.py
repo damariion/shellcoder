@@ -7,9 +7,29 @@ from dataclasses import dataclass
 class Instruction:
     "structure that holds information on a single line"
 
-    bytecode: "bytes | None"
-    mnemonic: "str   | None"
-    comments: "str   | None"
+    bytecode: bytes
+    mnemonic: str
+    comments: str
+
+class Utilities:
+
+    @staticmethod
+    def stack_string(value: str) -> int:
+
+        # split string into segments of 4 where last is truncated
+        segments = [value[i:i+4] for i in range(0, len(value), 4)]
+        for segment in segments[::-1]:
+
+            # convert each char to hexadecimal variant
+            base16 = [f"{ord(char):x}" for char in segment]
+
+            # swap endianness and add null-byte padding
+            string = segment.ljust(4, '.')[::-1]
+            base16 = ''.join(base16[::-1]).rjust(8, '0')
+        
+            print(f"push 0x{base16} ; {string}")
+
+        return 0
 
 class Keystone:
 
@@ -89,28 +109,8 @@ class Keystone:
             raise Exception("Couldn't close Keystone")
         self.ins = ct.c_void_p()
 
-class Utilities:
-
-    @staticmethod
-    def stack_string(value: str) -> int:
-        # TODO: Remove null-bytes entirely
-
-        # split string into segments of 4 where last is truncated
-        segments = [value[i:i+4] for i in range(0, len(value), 4)]
-        for segment in segments[::-1]:
-
-            # convert each char to hexadecimal variant
-            base16 = [f"{ord(char):x}" for char in segment]
-
-            # swap endianness and add null-byte padding
-            string = segment.ljust(4, '.')[::-1]
-            base16 = ''.join(base16[::-1]).rjust(8, '0')
-        
-            print(f"push 0x{base16} ; {string}")
-
-        return 0
-
 def text_to_bytecode(ks: Keystone, text: str) -> bytes:
+    "assemble the provided text using Keystone"
 
     size = ct.c_size_t()
     stat = ct.c_size_t()
@@ -133,7 +133,7 @@ def text_to_bytecode(ks: Keystone, text: str) -> bytes:
     ks.free(buff); return result
 
 def text_to_instructions(text: str) -> list[Instruction]:
-    "normalise the contents to AssemblyLine type"
+    "normalise the contents to Instruction type"
 
     output: list[Instruction] = []
 
@@ -146,8 +146,8 @@ def text_to_instructions(text: str) -> list[Instruction]:
             output.append(Instruction
             (
                 mnemonic = mnemonic,
-                comments = None,
-                bytecode = None
+                comments = '',
+                bytecode = b''
             ))
         return output
 
@@ -162,17 +162,17 @@ def text_to_instructions(text: str) -> list[Instruction]:
             (
                 mnemonic = mnemonic,
                 comments = comments,
-                bytecode = None
+                bytecode = b''
             ))
 
     return output
 
 def insert_bytecode(ks: Keystone, instructions: list[Instruction]) -> list[Instruction]:
-    "populate the provided assembly lines with their corresponding bytecode"
+    "populate the provided instructions with their corresponding bytecode"
 
     # ? join mnemonics in keystone-recognised format
-    original = ' ; '.join([x.mnemonic for x in instructions if x.mnemonic])
-    inserted = original.replace(';', ';salc;' * 2) # very uncommon!
+    original = " ; ".join([x.mnemonic for x in instructions if x.mnemonic])
+    inserted = original.replace(';', ";salc;" * 2) # very uncommon!
 
     # ? assemble the text (inserted will be used to distinct newlines)
     original = text_to_bytecode(ks, original) # ! explicit cast str -> bytes
@@ -180,7 +180,7 @@ def insert_bytecode(ks: Keystone, instructions: list[Instruction]) -> list[Instr
 
     # ? distinct newlines through comparisions
     bytecodes: list[bytes] = []; offset: int = 0
-    for line in [x for x in inserted.split(b"\xD6" * 2) if x]:
+    for line in [x for x in inserted.split(b"\xD6\xD6") if x]:
 
         # TODO: filter on branching opcodes (size differences)
         bytecodes.append(original[offset:offset+(size:=len(line))])
@@ -197,6 +197,127 @@ def insert_bytecode(ks: Keystone, instructions: list[Instruction]) -> list[Instr
 
     return output
 
+def format_instructions(instructions : list[Instruction],
+                        name         : str, 
+                        mnemonic_on  : bool, 
+                        comments_on  : bool) -> str:
+    "format a list of instructions conditionally"
+
+    output: list[str] = [f"{name}  = b''"]
+
+    # ? mb = max bytecode, mm = max mnemonic
+    mb = len(max(instructions, key=lambda x: len(x.bytecode)).bytecode)
+    mm = len(max(instructions, key=lambda x: len(x.mnemonic)).mnemonic)
+    def is_label(i: Instruction): return i.mnemonic and not i.bytecode
+    is_label_present = any(filter(is_label , instructions))
+    
+    # ? format
+    for i in instructions:
+
+        bytecode = ''
+        mnemonic = ''
+        comments = ''
+
+        # ? format: bytecode
+        if i.bytecode:
+
+            # bytecode
+            bytecode = "\\x".join([f"{c:02X}" for c in i.bytecode])
+            bytecode = f'{name} += b"' + f'\\x{bytecode}"'
+
+            # whitespace
+            if mnemonic_on or comments_on:
+                bytecode += ' ' * ((mb*4 + len(name) + 7) - len(bytecode) + 1)
+
+        # ? format: mnemonic
+        if i.mnemonic and mnemonic_on:
+
+            # mnemonic
+            if i.bytecode:
+                mnemonic += '#' + ' ' * (5 if is_label_present else 1)
+                mnemonic += i.mnemonic
+            else:
+                mnemonic += f"{name} += b''" + ' ' * (mb*4 + 1)
+                mnemonic += f"# {i.mnemonic}"
+
+            # whitespace
+            if i.comments and comments_on:
+                if not i.bytecode and is_label_present: 
+                    mnemonic += ' ' * 4
+                mnemonic += ' ' * (mm - len(i.mnemonic) + 1)
+
+        # ? format: comments
+        if i.bytecode and i.comments and comments_on:
+            comments += f"{';' if mnemonic_on else '#'} {i.comments}"
+
+        line = bytecode + mnemonic + comments
+        (output if line else []).append(line)
+
+    return '\n'.join(output)
+
+def execute_shellcode(code: bytes) -> None:
+
+    # ? declare the VirtualAlloc header
+    VirtualAlloc = ct.CDLL("kernel32.dll").VirtualAlloc
+    VirtualAlloc.restype, VirtualAlloc.argtypes = \
+    ct.c_void_p, [   # LPVOID <return>
+        ct.c_void_p, # LPVOID lpAddress
+        ct.c_size_t, # dwSize
+        ct.c_int32,  # flAllocationType
+        ct.c_int32   # flProtect
+    ]
+
+    # ? move shellcode into executable buffer
+    buffer = VirtualAlloc(None, len(code), 0x1000, 0x40)
+    ct.memmove(buffer, code, len(code))
+
+    # ? execute the shellcode...
+    input("Press enter to execute shellcode...")
+    ct.CFUNCTYPE(None)(buffer)()
+
+def enable_vt_processing() -> None:
+
+    # ? define the required API headers
+    GetStdHandle = ct.CDLL(f"kernel32").GetStdHandle
+    GetStdHandle.restype, GetStdHandle.argtypes = \
+    ct.c_void_p, [   # HANDLE <return>
+        ct.c_uint32  # DWORD nStdHandle
+    ]
+
+    GetConsoleMode = ct.CDLL(f"kernel32").GetConsoleMode
+    GetConsoleMode.restype, GetConsoleMode.argtypes = \
+    ct.c_bool, [     # BOOL <return>
+        ct.c_void_p, # HANDLE hConsoleHandle
+        ct.c_void_p  # LPDWORD lpMode
+    ]
+
+    SetConsoleMode = ct.CDLL(f"kernel32").SetConsoleMode
+    SetConsoleMode.restype, SetConsoleMode.argtypes = \
+    ct.c_bool, [     # BOOL <return>
+        ct.c_void_p, # HANDLE hConsoleHandle
+        ct.c_uint32  # DWORD dwMode
+    ]
+
+    # ? enable VT processing in the native CMD prompt
+    handle, mode = GetStdHandle(-11), ct.c_uint32()
+    GetConsoleMode(handle, ct.byref(mode))
+    SetConsoleMode(handle, mode.value | 0x4)
+
+def coloured_display(string: str, bad_characters: list[str]) -> None:
+
+    if hasattr(ct, "windll"):
+        enable_vt_processing()
+
+    for char in bad_characters:
+
+        i: int = int(char, 16)
+        string = string.replace(
+            f"\\x{i:02X}", 
+            f"\033[31m\\x{i:02X}\033[0m"
+            )
+
+    print(string)
+
 def parse_arguments() -> "dict[str, Any] | None":
 
     # ? parse CLI-arguments
@@ -205,14 +326,20 @@ def parse_arguments() -> "dict[str, Any] | None":
         action="store", help="assemble contents of a file")
     parser.add_argument('-t', "--text",
         action="store", help="assemble contents of a line")
-    parser.add_argument('-b', "--bads",
+    parser.add_argument('-b', "--bads", default=[],
         action="append", help="bad-characters to highlight (in hex)")
     parser.add_argument('-n', "--name", default="buffer",
         action="store", help="name of the output buffer")
     parser.add_argument('-u', "--util",
         action="store", help="utilise an integrated tool")
-    parser.add_argument('-e', "--exec",
+    parser.add_argument('-e', "--exec", default=False,
         action="store_true", help="execute the assembly on this system")
+    parser.add_argument('-l', "--line", default=False,
+        action="store_true", help="whether buffer must be rendered as one line")
+    parser.add_argument('-m', "--mnemonic", default=False,
+        action="store_true", help="whether mnemonic info must be rendered")
+    parser.add_argument('-c', "--comments", default=False,
+        action="store_true", help="whether comments info must be rendered")
     params = parser.parse_args().__dict__
 
     # ? verify: content (combinations)
@@ -252,12 +379,19 @@ def parse_arguments() -> "dict[str, Any] | None":
     if (util := params["util"]) and util not in utils:
         return print(f"Invalid utility '{util}' (doesn't exist)")
 
+    # ? verify: exec (operating system)
+    if params["exec"] and not hasattr(ct, "windll"):
+        return print(f"Invalid option 'exec' (not a Windows system)")
+
     return {
         "text": params["text"],
         "name": params["name"],
         "util": params["util"],
-        "exec": params["exec"] or False,
-        "bads": params["bads"] or [],
+        "bads": params["bads"],
+        "exec": params["exec"],
+        "line": params["line"],
+        "mnemonic": params["mnemonic"],
+        "comments": params["comments"],
     }
 
 if __name__ == "__main__" and (args := parse_arguments()):
@@ -267,13 +401,26 @@ if __name__ == "__main__" and (args := parse_arguments()):
         exit(getattr(Utilities, util)(args["text"]))
 
     # ? assemble the contents and obtain list[Instruction]
-    with Keystone("shellcoder/include/keystone.dylib") as ks:
+    with Keystone("keystone.dylib") as ks:
 
         try:
             instructions = text_to_instructions(str(args["text"]))
             instructions = insert_bytecode(ks, instructions)
         except Exception as e:
-            exit(f"Couldn't assemble content: {e}")
+            print(f"Couldn't assemble content: {e}"); exit(1)
 
-    # ? neatly formatted instructions
-    ...
+    # ? primary functionality
+    bytecode = b''.join([c.bytecode for c in instructions])
+    if args["exec"]: 
+        execute_shellcode(bytecode); exit(0)
+    if args["line"]: 
+        bytecode = "\\x" + "\\x".join([f"{c:02X}" for c in bytecode])
+    else: 
+        bytecode = format_instructions(
+                    instructions,
+                    args["name"], 
+                    args["mnemonic"], 
+                    args["comments"]
+                    )
+
+    coloured_display(bytecode, args["bads"])
