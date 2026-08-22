@@ -4,6 +4,7 @@ from argparse    import ArgumentParser
 from dataclasses import dataclass
 
 # * Assembler Interface {
+
 @dataclass
 class IR:
     "intermediate representation of an assembly line"
@@ -11,6 +12,7 @@ class IR:
     bytecode: bytes
     mnemonic: str
     comments: str
+
 class Keystone:
     "compact interface for Keystone interaction"
 
@@ -89,6 +91,7 @@ class Keystone:
         if self.ins and self.close(self.ins):
             raise Exception("Couldn't close Keystone")
         self.ins = ct.c_void_p()
+
 def text_to_bytecode(ks: Keystone, text: str) -> bytes:
     "assemble the provided text using Keystone"
 
@@ -111,6 +114,7 @@ def text_to_bytecode(ks: Keystone, text: str) -> bytes:
     # ? capture and immediately free
     result = bytes(buff[:size.value])
     ks.free(buff); return result
+
 def text_to_listofIR(text: str) -> list[IR]:
     "normalise the contents to the intermediate representation"
 
@@ -145,6 +149,7 @@ def text_to_listofIR(text: str) -> list[IR]:
             ))
 
     return output
+
 def assemble_IR(ks: Keystone, irs: list[IR]) -> list[IR]:
     "populate the provided irs with their corresponding bytecode"
 
@@ -174,6 +179,7 @@ def assemble_IR(ks: Keystone, irs: list[IR]) -> list[IR]:
         output.append(ir);
 
     return output
+
 def formater_IR(irs: list[IR], name: str, mnemonic_on: bool, comments_on: bool) -> str:
     "format a list of irs conditionally"
 
@@ -188,9 +194,9 @@ def formater_IR(irs: list[IR], name: str, mnemonic_on: bool, comments_on: bool) 
     # ? format
     for i in irs:
 
-        bytecode = ''
-        mnemonic = ''
-        comments = ''
+        bytecode: str = ''
+        mnemonic: str = ''
+        comments: str = ''
 
         # ? format: bytecode
         if i.bytecode:
@@ -228,10 +234,13 @@ def formater_IR(irs: list[IR], name: str, mnemonic_on: bool, comments_on: bool) 
         (output if line else []).append(line)
 
     return '\n'.join(output)
+
 # * } Assembler Interface
 
 # * Windows Compatibility {
+
 IS_WINDOWS: bool = hasattr(ct, "windll")
+
 def enable_ansi_mode() -> None:
     "enable ANSI-recognition on archaic Windows systems"
 
@@ -260,6 +269,7 @@ def enable_ansi_mode() -> None:
     handle, mode = GetStdHandle(-11), ct.c_uint32()
     GetConsoleMode(handle, ct.byref(mode))
     SetConsoleMode(handle, mode.value | 0x4)
+
 def insert_shellcode(code: bytes) -> None:
     "execute the provided bytes through shellcode injection"
 
@@ -280,9 +290,11 @@ def insert_shellcode(code: bytes) -> None:
     # ? execute the shellcode...
     input("Press enter to execute shellcode...")
     ct.CFUNCTYPE(None)(buffer)()
+
 # * } Windows Compatibility
 
 # * { I/O Handling
+
 def parse_arguments() -> "dict[str, Any] | None":
     "parse the CLI-provided arguments using argparse"
 
@@ -359,6 +371,7 @@ def parse_arguments() -> "dict[str, Any] | None":
         "mnemonic": params["mnemonic"],
         "comments": params["comments"],
     }
+
 def print_shellcode(string: str, bad_characters: list[str]) -> None:
 
     # ? enable ANSI-support
@@ -374,6 +387,7 @@ def print_shellcode(string: str, bad_characters: list[str]) -> None:
             )
 
     print(string)
+
 # * } I/O Handling
 
 class Utilities:
